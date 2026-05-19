@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using BoatGame.Boat;
 using BoatGame.Player;
 using BoatGame.Water;
@@ -22,6 +23,23 @@ namespace BoatGame.World
         [SerializeField] private ChunkStreamer streamer;
 
         private int worldLayer;
+        private readonly Dictionary<Vector2Int, MaritimePoiType> guaranteedPois = new Dictionary<Vector2Int, MaritimePoiType>(16);
+
+        public readonly struct WorldPoiInfo
+        {
+            public WorldPoiInfo(Vector2Int coordinate, MaritimePoiType type, Vector3 position, string displayName)
+            {
+                Coordinate = coordinate;
+                Type = type;
+                Position = position;
+                DisplayName = displayName;
+            }
+
+            public Vector2Int Coordinate { get; }
+            public MaritimePoiType Type { get; }
+            public Vector3 Position { get; }
+            public string DisplayName { get; }
+        }
 
         public int Seed => seed;
         public Transform StreamingTarget => streamingTarget;
@@ -96,7 +114,142 @@ namespace BoatGame.World
 
         public MaritimePoiType GetPoiType(Vector2Int coordinate)
         {
+            if (guaranteedPois.TryGetValue(coordinate, out MaritimePoiType guaranteedType))
+            {
+                return guaranteedType;
+            }
+
             return WorldRules.ChoosePoiType(seed, coordinate, settings);
+        }
+
+        public bool TryFindPoi(Vector3 origin, MaritimePoiType[] allowedTypes, float minDistance, float maxDistance, out WorldPoiInfo poi)
+        {
+            poi = default;
+            if (allowedTypes == null || allowedTypes.Length == 0)
+            {
+                return false;
+            }
+
+            Vector2Int center = WorldToChunk(origin);
+            float chunkSize = Mathf.Max(1f, settings.chunkSize);
+            int radius = Mathf.Max(1, Mathf.CeilToInt(maxDistance / chunkSize));
+            float minSqr = minDistance * minDistance;
+            float maxSqr = maxDistance * maxDistance;
+            float bestSqr = float.MaxValue;
+            bool found = false;
+
+            for (int z = -radius; z <= radius; z++)
+            {
+                for (int x = -radius; x <= radius; x++)
+                {
+                    Vector2Int coordinate = new Vector2Int(center.x + x, center.y + z);
+                    MaritimePoiType type = GetPoiType(coordinate);
+                    if (!ContainsType(allowedTypes, type))
+                    {
+                        continue;
+                    }
+
+                    Vector3 position = GetChunkCenter(coordinate);
+                    float sqr = (position - origin).sqrMagnitude;
+                    if (sqr < minSqr || sqr > maxSqr || sqr >= bestSqr)
+                    {
+                        continue;
+                    }
+
+                    bestSqr = sqr;
+                    poi = new WorldPoiInfo(coordinate, type, position, GetPoiDisplayName(type, coordinate));
+                    found = true;
+                }
+            }
+
+            return found;
+        }
+
+        public WorldPoiInfo EnsurePoiNear(Vector3 origin, MaritimePoiType requestedType, float minDistance, float maxDistance)
+        {
+            MaritimePoiType[] types = { requestedType };
+            if (TryFindPoi(origin, types, minDistance, maxDistance, out WorldPoiInfo existing))
+            {
+                return existing;
+            }
+
+            Vector2Int center = WorldToChunk(origin);
+            float chunkSize = Mathf.Max(1f, settings.chunkSize);
+            int minRadius = Mathf.Max(1, Mathf.FloorToInt(minDistance / chunkSize));
+            int maxRadius = Mathf.Max(minRadius + 1, Mathf.CeilToInt(maxDistance / chunkSize));
+
+            for (int radius = minRadius; radius <= maxRadius; radius++)
+            {
+                for (int z = -radius; z <= radius; z++)
+                {
+                    for (int x = -radius; x <= radius; x++)
+                    {
+                        if (Mathf.Max(Mathf.Abs(x), Mathf.Abs(z)) != radius)
+                        {
+                            continue;
+                        }
+
+                        Vector2Int coordinate = new Vector2Int(center.x + x, center.y + z);
+                        if (Vector2.Distance(new Vector2(coordinate.x, coordinate.y), Vector2.zero) < 1.5f)
+                        {
+                            continue;
+                        }
+
+                        guaranteedPois[coordinate] = requestedType;
+                        Vector3 position = GetChunkCenter(coordinate);
+                        streamer?.ForceRefresh();
+                        return new WorldPoiInfo(coordinate, requestedType, position, GetPoiDisplayName(requestedType, coordinate));
+                    }
+                }
+            }
+
+            Vector2Int fallback = new Vector2Int(center.x + maxRadius, center.y);
+            guaranteedPois[fallback] = requestedType;
+            return new WorldPoiInfo(fallback, requestedType, GetChunkCenter(fallback), GetPoiDisplayName(requestedType, fallback));
+        }
+
+        public string GetPoiDisplayName(MaritimePoiType type, Vector2Int coordinate)
+        {
+            string prefix;
+            switch (type)
+            {
+                case MaritimePoiType.Port:
+                    prefix = "Port";
+                    break;
+                case MaritimePoiType.LargeIsland:
+                    prefix = "Grande ile";
+                    break;
+                case MaritimePoiType.SmallIsland:
+                    prefix = "Ile";
+                    break;
+                case MaritimePoiType.Shipwreck:
+                    prefix = "Epave";
+                    break;
+                case MaritimePoiType.DangerZone:
+                    prefix = "Passe dangereuse";
+                    break;
+                case MaritimePoiType.RockCluster:
+                    prefix = "Recifs";
+                    break;
+                default:
+                    prefix = "Mer ouverte";
+                    break;
+            }
+
+            return $"{prefix} {Mathf.Abs(coordinate.x * 17 + coordinate.y * 31) % 997:000}";
+        }
+
+        private static bool ContainsType(MaritimePoiType[] allowedTypes, MaritimePoiType type)
+        {
+            for (int i = 0; i < allowedTypes.Length; i++)
+            {
+                if (allowedTypes[i] == type)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void RegisterSingleton()

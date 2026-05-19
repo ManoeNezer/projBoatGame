@@ -67,6 +67,16 @@ namespace BoatGame.Boat
         private Vector3 sailBaseLocalPosition;
         private Vector3 lastPropulsionForce;
         private Vector3 lastRudderForce;
+        private float damageSailEfficiency = 1f;
+        private float damageRudderEfficiency = 1f;
+        private float damageMastStability = 1f;
+        private float weatherSailForceMultiplier = 1f;
+        private float weatherRudderForceMultiplier = 1f;
+        private float weatherHandlingMultiplier = 1f;
+        private float weatherInstability = 0f;
+        private float upgradeSailForceMultiplier = 1f;
+        private float upgradeRudderForceMultiplier = 1f;
+        private float upgradeHandlingMultiplier = 1f;
 
         public Rigidbody Body => body;
         public float CurrentRudderAngle => currentRudderAngle;
@@ -74,6 +84,8 @@ namespace BoatGame.Boat
         public float SailOpen01 => sailOpen01;
         public Vector3 LastPropulsionForce => lastPropulsionForce;
         public Vector3 LastRudderForce => lastRudderForce;
+        public float SailEfficiency => damageSailEfficiency * weatherSailForceMultiplier * upgradeSailForceMultiplier;
+        public float RudderEfficiency => damageRudderEfficiency * weatherRudderForceMultiplier * upgradeRudderForceMultiplier;
 
         private void Awake()
         {
@@ -161,6 +173,28 @@ namespace BoatGame.Boat
             targetSailAngle = sailAngle;
         }
 
+        public void SetDamageModifiers(float sailEfficiency, float rudderEfficiency, float mastStability)
+        {
+            damageSailEfficiency = Mathf.Clamp01(sailEfficiency);
+            damageRudderEfficiency = Mathf.Clamp01(rudderEfficiency);
+            damageMastStability = Mathf.Clamp01(mastStability);
+        }
+
+        public void SetWeatherModifiers(float sailForceMultiplier, float rudderForceMultiplier, float handlingMultiplier, float instability)
+        {
+            weatherSailForceMultiplier = Mathf.Clamp(sailForceMultiplier, 0.15f, 2.5f);
+            weatherRudderForceMultiplier = Mathf.Clamp(rudderForceMultiplier, 0.2f, 1.8f);
+            weatherHandlingMultiplier = Mathf.Clamp(handlingMultiplier, 0.25f, 1.5f);
+            weatherInstability = Mathf.Clamp01(instability);
+        }
+
+        public void SetUpgradeModifiers(float sailForceMultiplier, float rudderForceMultiplier, float handlingMultiplier)
+        {
+            upgradeSailForceMultiplier = Mathf.Clamp(sailForceMultiplier, 0.5f, 3f);
+            upgradeRudderForceMultiplier = Mathf.Clamp(rudderForceMultiplier, 0.5f, 3f);
+            upgradeHandlingMultiplier = Mathf.Clamp(handlingMultiplier, 0.5f, 2f);
+        }
+
         private void ReadFallbackKeyboard()
         {
             float helm = 0f;
@@ -199,26 +233,28 @@ namespace BoatGame.Boat
         private void UpdateRudderState(float dt)
         {
             bool hasInput = Time.frameCount - lastHelmInputFrame <= 2 && Mathf.Abs(helmInput) > 0.001f;
+            float rudderHandling = Mathf.Lerp(0.42f, 1f, damageRudderEfficiency) * weatherHandlingMultiplier * upgradeHandlingMultiplier;
             if (hasInput)
             {
-                targetRudderAngle = Mathf.Clamp(targetRudderAngle + helmInput * rudderTurnSpeed * dt, -maxRudderAngle, maxRudderAngle);
+                targetRudderAngle = Mathf.Clamp(targetRudderAngle + helmInput * rudderTurnSpeed * rudderHandling * dt, -maxRudderAngle, maxRudderAngle);
             }
             else
             {
-                targetRudderAngle = Mathf.MoveTowards(targetRudderAngle, 0f, rudderReturnSpeed * dt);
+                targetRudderAngle = Mathf.MoveTowards(targetRudderAngle, 0f, rudderReturnSpeed * Mathf.Max(0.45f, rudderHandling) * dt);
                 helmInput = 0f;
             }
 
-            currentRudderAngle = Mathf.MoveTowards(currentRudderAngle, targetRudderAngle, rudderResponseSpeed * dt);
+            currentRudderAngle = Mathf.MoveTowards(currentRudderAngle, targetRudderAngle, rudderResponseSpeed * Mathf.Max(0.35f, rudderHandling) * dt);
         }
 
         private void UpdateSailState(float dt)
         {
             bool hasInput = Time.frameCount - lastSailInputFrame <= 2;
+            float sailHandling = Mathf.Lerp(0.35f, 1f, damageMastStability) * weatherHandlingMultiplier * upgradeHandlingMultiplier;
             if (hasInput)
             {
-                targetSailOpen01 = Mathf.Clamp01(targetSailOpen01 + sailHoistInput * sailHoistSpeed * dt);
-                targetSailAngle = Mathf.Clamp(targetSailAngle + sailTrimInput * sailTrimSpeed * dt, -85f, 85f);
+                targetSailOpen01 = Mathf.Clamp01(targetSailOpen01 + sailHoistInput * sailHoistSpeed * sailHandling * dt);
+                targetSailAngle = Mathf.Clamp(targetSailAngle + sailTrimInput * sailTrimSpeed * sailHandling * dt, -85f, 85f);
             }
             else
             {
@@ -226,8 +262,8 @@ namespace BoatGame.Boat
                 sailTrimInput = 0f;
             }
 
-            sailOpen01 = Mathf.MoveTowards(sailOpen01, targetSailOpen01, sailHoistSpeed * dt * 1.35f);
-            sailAngle = Mathf.MoveTowards(sailAngle, targetSailAngle, sailResponseSpeed * dt);
+            sailOpen01 = Mathf.MoveTowards(sailOpen01, targetSailOpen01, sailHoistSpeed * Mathf.Max(0.35f, sailHandling) * dt * 1.35f);
+            sailAngle = Mathf.MoveTowards(sailAngle, targetSailAngle, sailResponseSpeed * Mathf.Max(0.35f, sailHandling) * dt);
         }
 
         private void ApplySailForces()
@@ -251,13 +287,15 @@ namespace BoatGame.Boat
 
             Vector3 apparentDirection = apparentWind / apparentSpeed;
             Vector3 forward = transform.forward;
-            Vector3 sailNormal = Quaternion.AngleAxis(sailAngle, transform.up) * forward;
+            float unstableAngle = sailAngle + Mathf.Sin(Time.time * 5.7f + transform.position.x * 0.03f) * weatherInstability * Mathf.Lerp(3f, 10f, 1f - damageMastStability);
+            Vector3 sailNormal = Quaternion.AngleAxis(unstableAngle, transform.up) * forward;
             float catchAmount = Mathf.Abs(Vector3.Dot(apparentDirection, sailNormal));
             float forwardWind = Vector3.Dot(apparentDirection, forward);
             float windUsefulness = Mathf.Clamp01(forwardWind * 0.55f + 0.62f);
             float trimEfficiency = Mathf.SmoothStep(0f, 1f, catchAmount);
             float speedLimiter = 1f - Mathf.InverseLerp(maxForwardSpeed * 0.78f, maxForwardSpeed, Vector3.Dot(body.linearVelocity, forward));
-            float efficiency = sailOpen01 * trimEfficiency * windUsefulness * Mathf.Clamp01(speedLimiter);
+            float rigEfficiency = damageSailEfficiency * Mathf.Lerp(0.45f, 1f, damageMastStability) * weatherSailForceMultiplier * upgradeSailForceMultiplier;
+            float efficiency = sailOpen01 * trimEfficiency * windUsefulness * Mathf.Clamp01(speedLimiter) * rigEfficiency;
 
             Vector3 propulsion = forward * (apparentSpeed * apparentSpeed * sailPropulsionScale * efficiency);
             float sideSign = Vector3.Dot(apparentDirection, transform.right);
@@ -280,9 +318,10 @@ namespace BoatGame.Boat
             float speedFactor = Mathf.InverseLerp(0.2f, maxForwardSpeed * 0.75f, Mathf.Abs(forwardSpeed));
             float directionSign = Mathf.Sign(Mathf.Abs(forwardSpeed) > 0.15f ? forwardSpeed : 1f);
             float rudder01 = currentRudderAngle / maxRudderAngle;
+            float rudderEfficiency = damageRudderEfficiency * weatherRudderForceMultiplier * upgradeRudderForceMultiplier;
 
-            body.AddTorque(Vector3.up * (rudder01 * rudderTorque * speedFactor * directionSign), ForceMode.Force);
-            lastRudderForce = -transform.right * (rudder01 * rudderSideForce * speedFactor * directionSign);
+            body.AddTorque(Vector3.up * (rudder01 * rudderTorque * speedFactor * directionSign * rudderEfficiency), ForceMode.Force);
+            lastRudderForce = -transform.right * (rudder01 * rudderSideForce * speedFactor * directionSign * rudderEfficiency);
             body.AddForceAtPosition(lastRudderForce, GetForcePoint(rudderForcePoint), ForceMode.Force);
         }
 
@@ -331,14 +370,16 @@ namespace BoatGame.Boat
             if (sailVisual != null)
             {
                 float visibleHeight = Mathf.Lerp(0.12f, 1f, sailOpen01);
-                sailVisual.localRotation = sailBaseRotation * Quaternion.Euler(0f, sailAngle, 0f);
+                float flap = Mathf.Sin(Time.time * 7.5f) * weatherInstability * Mathf.Lerp(2f, 8f, 1f - damageMastStability);
+                sailVisual.localRotation = sailBaseRotation * Quaternion.Euler(flap * 0.25f, sailAngle + flap, flap * 0.35f);
                 sailVisual.localScale = new Vector3(sailBaseScale.x, sailBaseScale.y * visibleHeight, sailBaseScale.z);
                 sailVisual.localPosition = sailBaseLocalPosition + Vector3.down * ((1f - visibleHeight) * 0.58f);
             }
 
             if (boomVisual != null)
             {
-                boomVisual.localRotation = boomBaseRotation * Quaternion.Euler(0f, sailAngle, 0f);
+                float boomShake = Mathf.Sin(Time.time * 6.2f + 0.4f) * weatherInstability * Mathf.Lerp(1f, 5f, 1f - damageMastStability);
+                boomVisual.localRotation = boomBaseRotation * Quaternion.Euler(0f, sailAngle + boomShake, 0f);
             }
 
             if (rudderVisual != null)

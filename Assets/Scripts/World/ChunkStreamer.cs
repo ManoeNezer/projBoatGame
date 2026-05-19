@@ -102,7 +102,7 @@ namespace BoatGame.World
         {
             if (chunks.TryGetValue(coordinate, out WorldChunk chunk))
             {
-                if (chunk.IsDistant != distant)
+                if (chunk.IsDistant != distant || chunk.PoiType != manager.GetPoiType(coordinate))
                 {
                     chunk.Build(manager, coordinate, distant);
                 }

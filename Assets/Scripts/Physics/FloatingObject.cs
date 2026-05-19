@@ -30,6 +30,8 @@ namespace BoatGame.Physics
         private Rigidbody body;
         private float lastWetness;
         private Vector3 lastCenterOfBuoyancy;
+        private float externalBuoyancyMultiplier = 1f;
+        private float externalWaterDragMultiplier = 1f;
 
         public float Wetness => lastWetness;
         public Vector3 CenterOfBuoyancy => lastCenterOfBuoyancy;
@@ -103,11 +105,11 @@ namespace BoatGame.Physics
                 float submergence = Mathf.Clamp01(depth / pointSubmergeDepth);
                 submergence = submergence * submergence * (3f - 2f * submergence);
 
-                Vector3 buoyancyForce = -UnityEngine.Physics.gravity * (massPerPoint * buoyancyMultiplier * submergence);
+                Vector3 buoyancyForce = -UnityEngine.Physics.gravity * (massPerPoint * buoyancyMultiplier * externalBuoyancyMultiplier * submergence);
                 Vector3 waterVelocity = sample.Velocity + water.CurrentVelocity;
                 Vector3 pointVelocity = body.GetPointVelocity(pointPosition);
                 Vector3 relativeVelocity = pointVelocity - waterVelocity;
-                Vector3 dragForce = -relativeVelocity * (waterDrag * massPerPoint * submergence);
+                Vector3 dragForce = -relativeVelocity * (waterDrag * externalWaterDragMultiplier * massPerPoint * submergence);
                 Vector3 verticalDampingForce = -Vector3.Project(relativeVelocity, Vector3.up) * (verticalDamping * massPerPoint * submergence);
                 Vector3 force = buoyancyForce + dragForce + verticalDampingForce;
 
@@ -161,6 +163,12 @@ namespace BoatGame.Physics
             localCenterOfMass = centerOfMass;
             overrideCenterOfMass = true;
             ApplyCenterOfMass();
+        }
+
+        public void SetExternalWaterModifiers(float buoyancyScale, float dragScale)
+        {
+            externalBuoyancyMultiplier = Mathf.Clamp(buoyancyScale, 0.25f, 2.5f);
+            externalWaterDragMultiplier = Mathf.Clamp(dragScale, 0.25f, 4f);
         }
 
         private void ApplyCenterOfMass()

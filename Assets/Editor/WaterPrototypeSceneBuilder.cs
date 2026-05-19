@@ -2,12 +2,21 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using BoatGame.Boat;
+using BoatGame.Damage;
 using BoatGame.Debugging;
+using BoatGame.Discovery;
+using BoatGame.Economy;
 using BoatGame.Environment;
+using BoatGame.Events;
 using BoatGame.Interaction;
 using BoatGame.Physics;
 using BoatGame.Player;
+using BoatGame.Port;
+using BoatGame.Quests;
+using BoatGame.Rumors;
+using BoatGame.Upgrades;
 using BoatGame.Water;
+using BoatGame.Weather;
 using BoatGame.World;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -571,6 +580,8 @@ namespace BoatGame.EditorTools
             FloatingObject floatingObject = root.AddComponent<FloatingObject>();
             floatingObject.SetFloatPoints(floatPoints);
             floatingObject.Configure(0.95f, 1.15f, 1.35f, 4.2f, 0.82f, 78000f, new Vector3(0f, -0.65f, -0.12f));
+            RepairResource repairResource = root.AddComponent<RepairResource>();
+            repairResource.Configure(10, 16);
 
             Transform sailForcePoint = new GameObject("SailForcePoint").transform;
             sailForcePoint.SetParent(root.transform, false);
@@ -584,6 +595,9 @@ namespace BoatGame.EditorTools
 
             BoatHelmController helmController = root.AddComponent<BoatHelmController>();
             helmController.ConfigurePrototypeRig(sailForcePoint, rudderForcePoint, sail.transform, boom.transform, rudder.transform, helm.transform);
+            BoatDamageSystem damageSystem = root.AddComponent<BoatDamageSystem>();
+            damageSystem.Configure(helmController, floatingObject, repairResource);
+            root.AddComponent<BoatUpgradeSystem>();
 
             Transform helmStandAnchor = CreateAnchor(root.transform, "HelmStandAnchor", new Vector3(0f, 0.34f, -2.08f), Quaternion.identity, boatLayer);
             Transform helmCameraAnchor = CreateAnchor(root.transform, "HelmCameraAnchor", new Vector3(0f, 1.74f, -2.25f), Quaternion.Euler(8f, 0f, 0f), boatLayer);
@@ -596,6 +610,11 @@ namespace BoatGame.EditorTools
             GameObject sailStationObject = CreateStationTrigger(root.transform, "SailStation", new Vector3(-0.72f, 1.0f, 0.45f), new Vector3(1.3f, 1.55f, 1.55f), interactableLayer);
             SailStation sailStation = sailStationObject.AddComponent<SailStation>();
             sailStation.Configure(helmController, sailStandAnchor, sailCameraAnchor);
+
+            CreateRepairPoint(root.transform, "HullRepairPoint", new Vector3(0.95f, 0.62f, 1.55f), new Vector3(0.42f, 0.22f, 0.42f), damageSystem, repairResource, BoatPartType.Hull, wood, interactableLayer);
+            CreateRepairPoint(root.transform, "SailRepairPoint", new Vector3(-0.92f, 0.68f, 0.55f), new Vector3(0.38f, 0.22f, 0.38f), damageSystem, repairResource, BoatPartType.Sail, canvas, interactableLayer);
+            CreateRepairPoint(root.transform, "RudderRepairPoint", new Vector3(0.72f, 0.62f, -2.85f), new Vector3(0.36f, 0.22f, 0.36f), damageSystem, repairResource, BoatPartType.Rudder, metal, interactableLayer);
+            CreateRepairPoint(root.transform, "MastRepairPoint", new Vector3(0.35f, 0.62f, 0.42f), new Vector3(0.36f, 0.22f, 0.36f), damageSystem, repairResource, BoatPartType.Mast, darkWood, interactableLayer);
 
             GameObject prefab = SavePrefab(root, BoatPrefabPath);
             Object.DestroyImmediate(root);
@@ -641,6 +660,11 @@ namespace BoatGame.EditorTools
             FpsPlayerController controller = root.AddComponent<FpsPlayerController>();
             LayerMask groundMask = ~((1 << playerLayer) | (1 << interactableLayer));
             controller.Configure(camera, cameraRoot, groundMask);
+            root.AddComponent<RepairTool>();
+            PlayerCurrency currency = root.AddComponent<PlayerCurrency>();
+            currency.Configure(120);
+            root.AddComponent<ResourceInventory>();
+            cameraObject.AddComponent<WeatherCameraFeedback>();
 
             InteractionSystem interactionSystem = root.AddComponent<InteractionSystem>();
             LayerMask interactionMask = ~(1 << playerLayer);
@@ -766,6 +790,41 @@ namespace BoatGame.EditorTools
             return child;
         }
 
+        private static RepairablePart CreateRepairPoint(
+            Transform parent,
+            string name,
+            Vector3 localPosition,
+            Vector3 localScale,
+            BoatDamageSystem damageSystem,
+            RepairResource repairResource,
+            BoatPartType partType,
+            Material material,
+            int layer)
+        {
+            GameObject point = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            point.name = name;
+            point.layer = layer;
+            point.transform.SetParent(parent, false);
+            point.transform.localPosition = localPosition;
+            point.transform.localScale = localScale;
+
+            Collider collider = point.GetComponent<Collider>();
+            if (collider != null)
+            {
+                collider.isTrigger = true;
+            }
+
+            Renderer renderer = point.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                renderer.sharedMaterial = material;
+            }
+
+            RepairablePart repairable = point.AddComponent<RepairablePart>();
+            repairable.Configure(damageSystem, repairResource, partType, partType == BoatPartType.Hull ? 0.34f : 0.28f, 1);
+            return repairable;
+        }
+
         private static GameObject CreateMeshChild(Transform parent, string name, Mesh mesh, Material material, int layer = -1)
         {
             GameObject child = new GameObject(name);
@@ -845,6 +904,9 @@ namespace BoatGame.EditorTools
             windManager.DirectionDegrees = 42f;
             windManager.BaseStrength = 8.5f;
 
+            GameObject weatherObject = new GameObject("WeatherManager");
+            weatherObject.AddComponent<WeatherManager>();
+
             GameObject ocean = new GameObject("Ocean");
             MeshFilter oceanMeshFilter = ocean.AddComponent<MeshFilter>();
             oceanMeshFilter.sharedMesh = oceanMesh;
@@ -866,6 +928,51 @@ namespace BoatGame.EditorTools
 
             worldManager.Configure(boat.transform, worldMaterials, PrototypeWorldSeed);
             chunkStreamer.Configure(worldManager);
+
+            GameObject stormZoneObject = new GameObject("PrototypeStormZone");
+            stormZoneObject.transform.position = new Vector3(220f, 0f, 135f);
+            StormZone stormZone = stormZoneObject.AddComponent<StormZone>();
+            stormZone.Configure(145f, 52f, 1f, 235f, 3.2f, 0.85f);
+
+            GameObject currentZoneObject = new GameObject("PrototypeCurrentZone");
+            currentZoneObject.transform.position = new Vector3(95f, 0f, 70f);
+            CurrentZone currentZone = currentZoneObject.AddComponent<CurrentZone>();
+            currentZone.Configure(68f, 118f, 3.1f, 20f);
+
+            GameObject eventObject = new GameObject("MaritimeEventManager");
+            eventObject.AddComponent<MaritimeEventManager>();
+
+            GameObject portUI = new GameObject("PortUIController");
+            portUI.AddComponent<PortUIController>();
+
+            GameObject portDebug = new GameObject("PortDebugTools");
+            portDebug.AddComponent<PortDebugTools>();
+
+            GameObject questManagerObject = new GameObject("QuestManager");
+            questManagerObject.AddComponent<QuestManager>();
+
+            GameObject rumorManagerObject = new GameObject("RumorManager");
+            rumorManagerObject.AddComponent<RumorManager>();
+
+            GameObject discoveryManagerObject = new GameObject("DiscoveryManager");
+            discoveryManagerObject.AddComponent<DiscoveryManager>();
+
+            GameObject contractUI = new GameObject("ContractBoardUI");
+            contractUI.AddComponent<ContractBoardUI>();
+
+            GameObject rumorUI = new GameObject("RumorUI");
+            rumorUI.AddComponent<RumorUI>();
+
+            GameObject trackerUI = new GameObject("ObjectiveTrackerUI");
+            trackerUI.AddComponent<ObjectiveTrackerUI>();
+
+            GameObject discoveryUI = new GameObject("DiscoveryNotificationUI");
+            discoveryUI.AddComponent<DiscoveryNotificationUI>();
+
+            GameObject questDebug = new GameObject("QuestDebugTools");
+            questDebug.AddComponent<QuestDebugTools>();
+
+            PortManager.CreateRuntimePort(new Vector3(165f, 0f, 95f), Quaternion.Euler(0f, 205f, 0f));
 
             GameObject player = PrefabUtility.InstantiatePrefab(playerPrefab) as GameObject;
             player.name = "FPSPlayer";
@@ -898,6 +1005,9 @@ namespace BoatGame.EditorTools
             GameObject debugProbe = new GameObject("WaterDebugProbe");
             debugProbe.transform.position = Vector3.zero;
             debugProbe.AddComponent<WaterDebugProbe>();
+
+            GameObject dangerDebug = new GameObject("DangerDebugUI");
+            dangerDebug.AddComponent<DangerDebugUI>();
 
             RenderSettings.skybox = CreateSkyboxMaterial();
             RenderSettings.ambientMode = AmbientMode.Trilight;

@@ -1,4 +1,9 @@
 using System.Collections.Generic;
+using BoatGame.Discovery;
+using BoatGame.Economy;
+using BoatGame.Port;
+using BoatGame.Quests;
+using BoatGame.Rumors;
 using UnityEngine;
 
 #if UNITY_EDITOR
@@ -55,6 +60,8 @@ namespace BoatGame.World
                 GenerateDistantSilhouette(localCenter, rng);
                 return;
             }
+
+            CreateDiscoverableLocation(localCenter);
 
             switch (poiType)
             {
@@ -335,7 +342,163 @@ namespace BoatGame.World
             light.color = new Color(1f, 0.72f, 0.42f);
 
             CreateSafeWaterBuoys(shore + shoreDirection * 115f, shoreDirection, right, rng, 7);
+            CreateInteractivePortServices(shore, shoreDirection, right, dockRotation, rng);
             GenerateBirdFlock(islandCenter + Vector3.up * rng.Range(36f, 52f), rng);
+        }
+
+        private void CreateInteractivePortServices(Vector3 shore, Vector3 shoreDirection, Vector3 right, Quaternion dockRotation, WorldRandom rng)
+        {
+            GameObject portRoot = new GameObject("InteractivePort");
+            portRoot.layer = manager.WorldLayer;
+            portRoot.transform.SetParent(transform, false);
+            portRoot.transform.localPosition = Vector3.zero;
+            PortManager port = portRoot.AddComponent<PortManager>();
+
+            GameObject portZoneObject = new GameObject("PortZone");
+            portZoneObject.layer = manager.WorldLayer;
+            portZoneObject.transform.SetParent(portRoot.transform, false);
+            portZoneObject.transform.localPosition = shore + shoreDirection * 42f + Vector3.up * (manager.WaterLevel + 2f);
+            BoxCollider portCollider = portZoneObject.AddComponent<BoxCollider>();
+            portCollider.isTrigger = true;
+            portCollider.size = new Vector3(150f, 22f, 160f);
+            portZoneObject.AddComponent<PortZone>();
+
+            Transform anchor = new GameObject("DockAnchor").transform;
+            anchor.SetParent(portRoot.transform, false);
+            anchor.localPosition = shore + shoreDirection * 66f + Vector3.up * (manager.WaterLevel + 0.95f);
+            anchor.localRotation = dockRotation;
+            anchor.gameObject.layer = manager.WorldLayer;
+
+            GameObject zoneObject = new GameObject("DockingZone");
+            zoneObject.layer = manager.WorldLayer;
+            zoneObject.transform.SetParent(portRoot.transform, false);
+            zoneObject.transform.localPosition = shore + shoreDirection * 66f + Vector3.up * (manager.WaterLevel + 1.2f);
+            zoneObject.transform.localRotation = dockRotation;
+            BoxCollider dockingCollider = zoneObject.AddComponent<BoxCollider>();
+            dockingCollider.isTrigger = true;
+            dockingCollider.size = new Vector3(34f, 8f, 38f);
+            DockingZone docking = zoneObject.AddComponent<DockingZone>();
+
+            port.Configure($"Port {coordinate.x}:{coordinate.y}", anchor, docking);
+            port.RegisterService(CreatePortService<ContractBoard>("ContractBoard", shore + shoreDirection * 62f + Vector3.up * (manager.WaterLevel + 1.25f), manager.Materials.dockWood));
+            port.RegisterService(CreatePortService<ResourceMerchant>("ResourceMerchant", shore + shoreDirection * 70f - right * 18f + Vector3.up * (manager.WaterLevel + 1.4f), manager.Materials.buildingWall));
+            port.RegisterService(CreatePortService<ShipUpgradeMerchant>("ShipUpgradeMerchant", shore + shoreDirection * 78f + right * 18f + Vector3.up * (manager.WaterLevel + 1.4f), manager.Materials.buildingRoof));
+            port.RegisterService(CreatePortService<RepairMerchant>("RepairMerchant", shore + shoreDirection * 88f + Vector3.up * (manager.WaterLevel + 1.4f), manager.Materials.dockWood));
+            port.RegisterService(CreatePortService<RumorSource>("RumorSource", shore + shoreDirection * 94f - right * 16f + Vector3.up * (manager.WaterLevel + 1.4f), manager.Materials.buildingWall));
+
+            GameObject calmWater = new GameObject("HarborCalmCurrent");
+            calmWater.layer = manager.WorldLayer;
+            calmWater.transform.SetParent(portRoot.transform, false);
+            calmWater.transform.localPosition = shore + shoreDirection * 74f;
+            CurrentZone current = calmWater.AddComponent<CurrentZone>();
+            current.Configure(54f, Mathf.Atan2(-shoreDirection.x, -shoreDirection.z) * Mathf.Rad2Deg, 0.35f, 18f);
+        }
+
+        private void CreateDiscoverableLocation(Vector3 localCenter)
+        {
+            GameObject marker = new GameObject($"Discoverable_{poiType}");
+            marker.layer = manager.WorldLayer;
+            marker.transform.SetParent(transform, false);
+            marker.transform.localPosition = localCenter + Vector3.up * (manager.WaterLevel + 1.5f);
+
+            DiscoverableLocation discoverable = marker.AddComponent<DiscoverableLocation>();
+            discoverable.Configure(
+                $"poi_{coordinate.x}_{coordinate.y}_{poiType}",
+                manager.GetPoiDisplayName(poiType, coordinate),
+                ResolveDiscoveryType(poiType),
+                poiType,
+                ResolveDiscoveryRadius(poiType),
+                ResolveDiscoveryCoins(poiType),
+                ResolveDiscoveryResourceType(poiType),
+                ResolveDiscoveryResourceAmount(poiType));
+        }
+
+        private static DiscoveryType ResolveDiscoveryType(MaritimePoiType type)
+        {
+            switch (type)
+            {
+                case MaritimePoiType.Port:
+                    return DiscoveryType.Port;
+                case MaritimePoiType.Shipwreck:
+                    return DiscoveryType.Shipwreck;
+                case MaritimePoiType.DangerZone:
+                case MaritimePoiType.RockCluster:
+                    return DiscoveryType.DangerZone;
+                default:
+                    return DiscoveryType.Island;
+            }
+        }
+
+        private static float ResolveDiscoveryRadius(MaritimePoiType type)
+        {
+            switch (type)
+            {
+                case MaritimePoiType.Port:
+                    return 160f;
+                case MaritimePoiType.LargeIsland:
+                    return 150f;
+                case MaritimePoiType.DangerZone:
+                    return 135f;
+                case MaritimePoiType.Shipwreck:
+                    return 115f;
+                default:
+                    return 100f;
+            }
+        }
+
+        private static int ResolveDiscoveryCoins(MaritimePoiType type)
+        {
+            switch (type)
+            {
+                case MaritimePoiType.Port:
+                    return 18;
+                case MaritimePoiType.Shipwreck:
+                    return 14;
+                case MaritimePoiType.DangerZone:
+                    return 16;
+                default:
+                    return 8;
+            }
+        }
+
+        private static ResourceType ResolveDiscoveryResourceType(MaritimePoiType type)
+        {
+            switch (type)
+            {
+                case MaritimePoiType.Shipwreck:
+                case MaritimePoiType.DangerZone:
+                    return ResourceType.Iron;
+                case MaritimePoiType.Port:
+                    return ResourceType.Rope;
+                default:
+                    return ResourceType.Wood;
+            }
+        }
+
+        private static int ResolveDiscoveryResourceAmount(MaritimePoiType type)
+        {
+            switch (type)
+            {
+                case MaritimePoiType.Shipwreck:
+                    return 1;
+                case MaritimePoiType.Port:
+                    return 1;
+                default:
+                    return 0;
+            }
+        }
+
+        private T CreatePortService<T>(string objectName, Vector3 localPosition, Material material) where T : PortServicePoint
+        {
+            GameObject service = CreatePrimitive(objectName, PrimitiveType.Cylinder, material, false);
+            service.layer = LayerMask.NameToLayer("Interactable") >= 0 ? LayerMask.NameToLayer("Interactable") : manager.WorldLayer;
+            service.transform.localPosition = localPosition;
+            service.transform.localScale = new Vector3(0.8f, 1.25f, 0.8f);
+            CapsuleCollider collider = service.AddComponent<CapsuleCollider>();
+            collider.isTrigger = true;
+            collider.radius = 0.65f;
+            collider.height = 2.2f;
+            return service.AddComponent<T>();
         }
 
         private void GenerateRockCluster(Vector3 localCenter, WorldRandom rng, bool withBuoys)
@@ -400,6 +563,13 @@ namespace BoatGame.World
             light.range = 72f;
             light.intensity = 1.7f;
             light.color = new Color(1f, 0.18f, 0.08f);
+
+            GameObject currentObject = new GameObject("DangerCurrentZone");
+            currentObject.layer = manager.WorldLayer;
+            currentObject.transform.SetParent(transform, false);
+            currentObject.transform.localPosition = localCenter;
+            CurrentZone currentZone = currentObject.AddComponent<CurrentZone>();
+            currentZone.Configure(96f, rng.Range(0f, 360f), rng.Range(2.2f, 4.2f), 28f);
         }
 
         private void GenerateShoreRocks(Vector3 localCenter, float radiusX, float radiusZ, WorldRandom rng, int count)
